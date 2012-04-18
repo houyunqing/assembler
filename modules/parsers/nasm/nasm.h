@@ -162,12 +162,9 @@ struct tokenval {
     char *t_charptr;
 };
 typedef int (*scanner) (void *private_data, struct tokenval *tv);
-
-
-/*
- * Processing function of {%pp_dir} structure
- */
 typedef int (*curl_eval) (void *private_data);
+typedef int (*ppdir_eval) (void *private_data);
+typedef void (*nasm_eval_setfuncs)(scanner, efunc, curl_eval, ppdir_eval);
 
 /*
  * Token types returned by the scanner, in addition to ordinary
@@ -177,7 +174,7 @@ enum {                                 /* token types, other than chars */
     TOKEN_INVALID = -1,                /* a placeholder value */
     TOKEN_EOS = 0,                     /* end of string */
     TOKEN_EQ = '=', TOKEN_GT = '>', TOKEN_LT = '<',   /* aliases */
-    TOKEN_ID = 256, TOKEN_NUM, TOKEN_REG, TOKEN_INSN,  /* major token types */
+    TOKEN_ID = 256, TOKEN_NUM, TOKEN_PPDIR, TOKEN_REG, TOKEN_INSN,  /* major token types */
     TOKEN_ERRNUM,                      /* numeric constant with error in */
     TOKEN_HERE, TOKEN_BASE,            /* $ and $$ */
     TOKEN_SPECIAL,                     /* BYTE, WORD, DWORD, FAR, NEAR, etc */
@@ -210,9 +207,8 @@ enum {                                 /* token types, other than chars */
  * &&, ^^ and ||.
  */
 #define CRITICAL 0x100
-typedef yasm::Expr *(*evalfunc) (scanner sc, void *scprivate, struct tokenval *tv,
-                           int critical, efunc error,
-			   curl_eval curly_evaluator);
+typedef yasm::Expr *(*evalfunc) (void *scprivate, struct tokenval *tv,
+                           int critical);
 
 
 /*
@@ -224,7 +220,7 @@ typedef struct {
      * of the pass, an error reporting function, an evaluator
      * function, and a listing generator to talk to.
      */
-    void (*reset) (yasm::FileID, int, efunc, evalfunc);
+    void (*reset) (yasm::FileID, int, efunc, evalfunc, nasm_eval_setfuncs);
 
     /*
      * Called to fetch a line of preprocessed source. The line

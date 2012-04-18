@@ -559,6 +559,7 @@ static Token *new_Token(Token * next, int type, const char *text,
 static Token *delete_Token(Token * t);
 static Token *tokenise(char *line);
 static int evaluate_curly_brackets(void *private_data);
+static int ppdir_processor(void *private_data);
 
 /*
  * Macros for safe checking of token pointers, avoid *(NULL)
@@ -1490,7 +1491,7 @@ tokenise(char *line)
                     (p[0] == '&' && p[1] == '&') ||
                     (p[0] == '|' && p[1] == '|') ||
                     (p[0] == '^' && p[1] == '^') ||
-		    (p[0] == '!' && p[1] == '?')) //ternary operator
+                    (p[0] == '!' && p[1] == '?')) //ternary operator
             {
                 p++;
             }
@@ -1702,6 +1703,13 @@ ppscan(void *private_data, struct tokenval *tokval)
 
     if (!tline)
         return tokval->t_type = TOKEN_EOS;
+    
+    if(tline->type == TOK_PREPROC_ID)
+    {
+        /* don't consume. Leave it to be inspected */
+        *tlineptr = tline;
+        return tokval->t_type = TOKEN_PPDIR;
+    }
 
     if (tline->text[0] == '$' && !tline->text[1])
         return tokval->t_type = TOKEN_HERE;
@@ -2087,7 +2095,7 @@ if_condition(Token * tline, int i)
 
     switch (i)
     {
-	//affected by {} structure
+        //affected by {} structure
         case PP_IFCTX:
         case PP_ELIFCTX:
         case PP_IFNCTX:
@@ -2144,7 +2152,7 @@ if_condition(Token * tline, int i)
                 free_tlist(origline);
             return j;
 
-		//affected by {} structure
+        //affected by {} structure
         case PP_IFIDN:
         case PP_ELIFIDN:
         case PP_IFNIDN:
@@ -2358,8 +2366,8 @@ if_condition(Token * tline, int i)
                     i == PP_IFNNUM || i == PP_ELIFNNUM ||
                     i == PP_IFNSTR || i == PP_ELIFNSTR)
                 j = !j;
-			if(curly_opened == 0)
-				free_tlist(tline);
+            if(curly_opened == 0)
+                free_tlist(tline);
             return j;
 
         case PP_IF:
@@ -2368,12 +2376,11 @@ if_condition(Token * tline, int i)
             t = tline = expand_smacro(tline);
             tptr = &t;
             tokval.t_type = TOKEN_INVALID;
-            evalresult = evaluate(ppscan, tptr, &tokval, pass | CRITICAL,
-                                  error, evaluate_curly_brackets);
-	    /*
-	     * Do not free if this function is invoked when processing
-	     * a {%pp_id} structure, which is part of %if*** line
-	     */
+            evalresult = evaluate(tptr, &tokval, pass | CRITICAL);
+            /*
+             * Do not free if this function is invoked when processing
+             * a {%pp_id} structure, which is part of %if*** line
+             */
             if(curly_opened == 0)
                 free_tlist(tline);
             if (!evalresult)
@@ -3233,10 +3240,9 @@ do_directive(Token * tline)
             tline = t;
             tptr = &t;
             tokval.t_type = TOKEN_INVALID;
-            evalresult = evaluate(ppscan, tptr, &tokval, pass, error,
-                        evaluate_curly_brackets);
-	    if(curly_opened == 0)
-		    free_tlist(tline);
+            evalresult = evaluate(tptr, &tokval, pass);
+            if(curly_opened == 0)
+                free_tlist(tline);
             if (!evalresult)
                 return DIRECTIVE_FOUND;
             if (tokval.t_type)
@@ -3276,7 +3282,7 @@ do_directive(Token * tline)
 
         case PP_REP:
             nolist = FALSE;
-            do {
+            do { // can be done by a pop then skip_white_(tline)
                 tline = tline->next;
             } while (tok_type_(tline, TOK_WHITESPACE));
 
@@ -3294,12 +3300,11 @@ do_directive(Token * tline)
                 t = expand_smacro(tline);
                 tptr = &t;
                 tokval.t_type = TOKEN_INVALID;
-                evalresult = evaluate(ppscan, tptr, &tokval, pass, error,
-                            evaluate_curly_brackets);
+                evalresult = evaluate(tptr, &tokval, pass);
                 if (!evalresult)
                 {
-					if(curly_opened == 0)
-					    free_tlist(origline);
+                    if(curly_opened == 0)
+                        free_tlist(origline);
                     return DIRECTIVE_FOUND;
                 }
                 if (tokval.t_type)
@@ -3703,8 +3708,7 @@ do_directive(Token * tline)
             tt = t->next;
             tptr = &tt;
             tokval.t_type = TOKEN_INVALID;
-            evalresult = evaluate(ppscan, tptr, &tokval, pass, error,
-                    evaluate_curly_brackets);
+            evalresult = evaluate(tptr, &tokval, pass);
             if (!evalresult)
             {
                 free_tlist(tline);
@@ -3804,8 +3808,7 @@ do_directive(Token * tline)
             t = tline;
             tptr = &t;
             tokval.t_type = TOKEN_INVALID;
-            evalresult = evaluate(ppscan, tptr, &tokval, pass, error, 
-                        evaluate_curly_brackets);
+            evalresult = evaluate(tptr, &tokval, pass);
             if(curly_opened == 0)
                 free_tlist(tline);
             if (!evalresult)
@@ -5018,9 +5021,12 @@ error(int severity, const char *fmt, ...)
 }
 
 static void
-pp_reset(FileID fid, int apass, efunc errfunc, evalfunc eval)
+pp_reset(FileID fid, int apass, efunc errfunc, evalfunc eval, nasm_eval_setfuncs setfunc)
 {
     int h;
+
+    //Sets utility functions for stuffs in nasm-eval.cpp
+    setfunc(ppscan, errfunc, evaluate_curly_brackets, ppdir_processor);
 
     _error = errfunc;
     cstk = NULL;
@@ -5516,6 +5522,10 @@ Preproc nasmpp = {
  * result of the evaluation. if_condition() has been modified so that
  * it frees the partial line sent to it only when it is not evaluating
  * something inside the {%pp_dir} structure.
+ *
+ * Return values: 
+ *      0/1: evaluated to false/true;
+ *      -1: Error in expression
  */
 static int evaluate_curly_brackets(void *private_data)
 {
@@ -5608,5 +5618,126 @@ static int evaluate_curly_brackets(void *private_data)
  * 3. Call if_condition to process the identified section
  * 4. Return result
  */
+
+/*
+ * ppdir_processor processes the %ifdir without needing the {}
+ * construct. Here %ifdirs are treated operators.
+ *
+ * %if is not a valid operator.
+ * 
+ * Only a single operand, which should end with whitespace or EOL, is
+ * recognised and passed to if_condition. In case multiple operands
+ * are needed, the %ifdir must be followed by (). The multiple
+ * operands may then be specified inside the brackets. %ifdir operand,
+ * or %ifdir(operands) behave exactly the same as the %ifdir
+ * directives when macro expansion is concerned.
+ * 
+ * Since %ifidn directives are must be binary, it can only work with
+ * the bracket notation mentioned above.
+ *
+ * Return values: 
+ *      0 or 1: evaluated to false/true;
+ *      -1: Error in expression
+ */
+static int ppdir_processor(void *private_data)
+{
+    //points to the %ppdir token itself
+    Token **t1 = (Token**)private_data;
+    Token *t_head = *t1;
+    Token *t_last, *t_end;
+    int i,j,k;
+
+    //confirm it's a valid %ifdir first
+    locate_directive(i,j,k,t_head);
+    if (j != -2)
+    {
+        error(ERR_FATAL, "Invalid preprocessor symbol in expression: '%s'", t_head->text);
+        return -1;
+    }
+    if( i <= PP_IF || i > PP_IFSTR)
+    {
+        error(ERR_FATAL, "%s is not a valid operator. Only those prefixed with '%%if',\
+ excluding '%if' itself, are acceptable.", t_head->text);
+        return -1;
+    }
+    else if( i == PP_IFDEF || i == PP_IFNDEF )
+    {
+        error(ERR_FATAL, "%s, along with its argument, needs to be surrounded in {}\
+when used inside an expression.", t_head->text);
+        return -1;
+    }
+
+    //start processing
+    ++curly_opened; 
+
+    t_head = t_head->next;
+    skip_white_(t_head);
+    //t_head now should point to the first operand, or '('
+
+    bool bracket = false;
+    if(tok_is_(t_head, "(" ))
+    {
+        bracket = true;
+        t_head = t_head->next;
+        skip_white_(t_head);
+    }
+    else if(i == PP_IFIDN || i == PP_IFNIDN || i == PP_IFIDNI || i == PP_IFNIDNI)
+    {
+        error(ERR_FATAL, "The %s operator must be followd by\
+ a pair of brackets containing two operands separated by comma.", (*t1)->text);
+        return -1;
+    }
+
+    //t_head now points to the first operand, or NULL
+    if(!t_head)
+    {
+        error(ERR_FATAL, "The %s directive requires operand.", (*t1)->text);
+        return -1;
+    }
+
+    //Find the ending token. It's either a whitespace or a
+    //corresponding closing bracket
+    t_last = t_head;
+    t_end = t_last->next;
+    if(!bracket)
+    {
+        //stop when end is whitespace or NULL
+        while(t_end && (t_end->type != TOK_WHITESPACE) )
+        {
+            t_last = t_end;
+            t_end = t_end -> next;
+        }
+    }
+    else
+    {
+        //stop searching for ')' only when brac_close > brac_open
+        int brac_open = 0, brac_close = 0;
+        while(t_end)
+        {
+            if(tok_is_(t_end, "(") )
+                ++brac_open;
+            else if(tok_is_(t_end, ")") )
+                ++brac_close;
+            if(brac_close > brac_open)
+                break;
+            t_last = t_end;
+            t_end = t_end -> next;
+        }
+        if(brac_close <= brac_open)
+        {
+            error(ERR_FATAL, "Expecting a matching closing bracket ')' for %s", (*t1)->text);
+            return -1;
+        }
+    }
+    //end has been found. Now cut if off and send to processing
+    t_last->next=NULL;
+    j = if_condition(t_head, i);
+    //stick it back
+    t_last->next = t_end;
+
+    *t1 = t_end? t_end->next : NULL;
+    --curly_opened;
+    return j;
+}
 
 } // namespace nasm

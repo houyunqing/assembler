@@ -1316,8 +1316,6 @@ NasmParser::ParseExprc(Expr& e, const ParseExprTerm* parse_term)
         if (!ParseExpr0(f, parse_term))
             return false;
         if (m_token.getKind() != NasmToken::colon) {
-            // FIXME: when user attempts to use floating point
-            // And error message?
             return false;
         }
         ConsumeToken();

@@ -130,12 +130,13 @@ NasmParser::Parse(Object& object, Directives& dirs, Diagnostic& diags)
     m_absstart.Clear();
     m_abspos.Clear();
 
+#if 1
     // XXX: HACK: run through nasm preproc and replace main file contents
     nasm::yasm_preproc = &m_preproc;
     nasm::yasm_object = &object;
     SourceManager& sm = m_preproc.getSourceManager();
     nasm_errors = 0;
-    nasm::nasmpp.reset(sm.getMainFileID(), 2, nasm_efunc, nasm::nasm_evaluate);
+    nasm::nasmpp.reset(sm.getMainFileID(), 2, nasm_efunc, nasm::nasm_evaluate, nasm::setfuncs);
 
     // pass down command line options
     for (std::vector<NasmPreproc::Predef>::iterator
@@ -187,9 +188,11 @@ NasmParser::Parse(Object& object, Directives& dirs, Diagnostic& diags)
     sprintf(nasm_version_mac[6], "%%define __YASM_VER__ \"%s\"",
             PACKAGE_VERSION);
     nasm_version_mac[7] = NULL;
+    // NOTE: useful
     nasm::pp_extra_stdmac(const_cast<const char**>(nasm_version_mac));
 
     // add standard macros
+    // NOTE: useful
     nasm::pp_extra_stdmac(nasm_standard_mac);
 
     // preprocess input
@@ -210,6 +213,7 @@ NasmParser::Parse(Object& object, Directives& dirs, Diagnostic& diags)
             result += los.str();
             prior_linnum = linnum;
         }
+        // NOTE: useful
         result += line;
         result += '\n';
     }
@@ -237,6 +241,7 @@ NasmParser::Parse(Object& object, Directives& dirs, Diagnostic& diags)
     sm.createMainFileIDForMemBuffer(
         llvm::MemoryBuffer::getMemBufferCopy(result, filename));
 
+#endif
     // Get first token
     m_preproc.EnterMainSourceFile();
     m_preproc.Lex(&m_token);

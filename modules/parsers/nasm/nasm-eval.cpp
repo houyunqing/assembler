@@ -30,6 +30,16 @@ yasm::Object *yasm_object;
 static scanner scan;    /* Address of scanner routine */
 static efunc error;     /* Address of error reporting routine */
 static curl_eval curly_evaluator; /*curly structure processor func*/
+static ppdir_eval ppdir_evaluator;/* %ifdir expression (without the
+                                    curly structure) handler */
+
+void setfuncs(scanner sc,efunc errfunc, curl_eval curl_evalfunc, ppdir_eval ppdirfunc)
+{
+    scan = sc;
+    error = errfunc;
+    curly_evaluator = curl_evalfunc;
+    ppdir_evaluator = ppdirfunc;
+}
 
 static struct tokenval *tokval;   /* The current token */
 static int i;                     /* The t_type of tokval */
@@ -386,14 +396,31 @@ static bool expr6(Expr* e)
         i = scan(scpriv, tokval);
         return true;
     } else if (i == '{' ) {
-	    	void* saved_priv = scpriv;
-		tokenval *saved_tok = tokval;
-		int j = curly_evaluator(scpriv);
-		scpriv = saved_priv;
-		tokval = saved_tok;
-		if( j == -1)
-			return false;
-		*e = Expr(IntNum(j));
+        /*
+         * scpriv -> A -> B
+         * A is the current Token*, B is the current Token
+         * curly_evaluator updates A to A2, but also calls
+         * if_condition(), which may change the value of scpriv
+         * again by calling evaluate(). 
+         * Thus when curly_evaluator returns, scpriv would no longer
+         * point to A2, but would point, instead, to another Token*
+         * scpriv -broken-> A2 -> B2
+         *        -newly set-> A3
+         * Since A2 is needed for correct behaviour, scpriv must be
+         * backed up and restored after curly_evaluator returns, so
+         * that it still points to A2
+         *
+         * A2 is the Token* after the '}' that corresponds to the
+         * opening '{'
+         */
+        void* saved_priv = scpriv;
+        tokenval *saved_tok = tokval;
+        int j = curly_evaluator(scpriv);
+        scpriv = saved_priv;
+        tokval = saved_tok;
+        if( j == -1)
+            return false;
+        *e = Expr(IntNum(j));
         i = scan(scpriv, tokval);
         return true;
     }
@@ -430,15 +457,27 @@ static bool expr6(Expr* e)
         }
         i = scan(scpriv, tokval);
         return true;
-    } else {
+    } 
+    else if(i == TOKEN_PPDIR) {
+        /* scpriv still points to the %ppdir token because scan() does
+         * not consume %ppdir tokens(actually all TOK_PREPROC_IDs are
+         * sent in here)
+         */
+        int j = ppdir_evaluator(scpriv);
+        if( j == -1 )
+            return false;
+        *e = Expr(IntNum(j));
+        i = scan(scpriv, tokval);
+        return true;
+    }
+    else {
         error(ERR_NONFATAL, "expression syntax error");
         return false;
     }
 }
 
-Expr *nasm_evaluate (scanner sc, void *scprivate, struct tokenval *tv,
-                          int critical, efunc report_error,
-						  curl_eval _curly_evaluator)
+Expr *nasm_evaluate (void *scprivate, struct tokenval *tv,
+                          int critical)
 {
     if (critical & CRITICAL) {
         critical &= ~CRITICAL;
@@ -446,11 +485,8 @@ Expr *nasm_evaluate (scanner sc, void *scprivate, struct tokenval *tv,
     } else
         bexpr = expr0;
 
-	curly_evaluator = _curly_evaluator;
-    scan = sc;
     scpriv = scprivate;
     tokval = tv;
-    error = report_error;
 
     if (tokval->t_type == TOKEN_INVALID)
         i = scan(scpriv, tokval);
